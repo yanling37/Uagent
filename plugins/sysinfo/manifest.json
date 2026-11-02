@@ -1,0 +1,1 @@
+{"id":"portableai.sysinfo","name":"System information","version":"1.0.0","description":"Read OS and Python version; trusted in-process code, not sandboxed.","tools":{"system_info":"read"},"dependencies":[],"config":{}}

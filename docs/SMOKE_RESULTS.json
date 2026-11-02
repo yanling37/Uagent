@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "answer": "Offline task completed.",
+  "checks": [
+    "authorized first sync",
+    "fake API tool loop",
+    "approved transactional write",
+    "host-to-portable hash sync",
+    "persistent FTS memory",
+    "guarded rollback"
+  ],
+  "network_calls": 0
+}
