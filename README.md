@@ -36,6 +36,7 @@ Windows 可双击 `Start-PortableAI.cmd` 运行源码版。最终目标用户无
 - SQLite FTS5 与中文子串检索、项目/重要性字段、精确去重、乐观版本更新和历史版本；最多保留 30 份数据库备份。
 - 插件清单、代码+manifest 哈希信任、工具权限声明校验；**可信进程内插件，不是操作系统沙盒**。
 - 本机/便携工具链路径检测与固定编译配方；进程 PATH/缓存配置不永久改系统。
+- QQ 邮箱短文本通道：只用 `smtp.qq.com:465` 和 `imap.qq.com:993` 收发一条 PortableAI 文本，授权码仅在进程内存；收到的邮件只显示，不自动执行。详见 `docs/QQ_MAIL.md`。
 
 ## 关键限制与未完成
 
@@ -46,7 +47,7 @@ Windows 可双击 `Start-PortableAI.cmd` 运行源码版。最终目标用户无
 - 本机工作副本和恢复记录会残留在该电脑，不是无痕运行。
 - 插件是用户明确信任的 Python 代码，可访问当前用户权限下系统；manifest 不是安全隔离边界。卸载/撤销信任后需重启。
 - SDK 未捆绑，自动工具链下载/签名校验/更新管理、任意命令终端、Git 自动操作暂未实现。
-- 不实现管理员操作、系统 VPN/驱动、AWS 服务、远程控制、跨设备加密备份。
+- 不实现管理员操作、系统 VPN/驱动、AWS 服务、远程控制、跨设备加密备份。QQ 邮箱通道只代替“常开服务器收发短消息”，明文经过 QQ，不能当作加密备份或文件同步。
 - 冲突需人工比较/处理；大文件断点续传、跨文件整体原子事务、强制系统断电保障未实现。
 - 记忆自动摘要/语义合并、完整任务依赖图/崩溃后模型会话续跑、持久化任务队列未实现。
 
@@ -61,6 +62,7 @@ portable_ai/hybrid_sync.py      Smart Hybrid 同步/恢复
 portable_ai/storage.py          SQLite 记忆/历史/FTS/审计
 portable_ai/tools.py            工具审批/插件 manifest
 portable_ai/devkit.py           已安装工具检测/固定编译配方
+portable_ai/qq_mail.py          QQ 邮箱短文本收发（标准库 SMTP/IMAP）
 plugins/sysinfo/                示例可信插件
 scripts/offline_smoke.py        零网络端到端验证
 tests/                         单元/协议/同步/安全测试

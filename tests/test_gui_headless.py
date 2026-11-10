@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from app import Application
+from portable_ai.qq_mail import IncomingNote
 
 
 class GuiControllerTests(unittest.TestCase):
@@ -147,6 +148,54 @@ class GuiControllerTests(unittest.TestCase):
         confirm.assert_called_once()
         a.prompt.delete.assert_not_called(); a.agent.run.assert_not_called()
         self.assertFalse(a.busy); self.assertEqual(a._cloud_consent,set())
+
+    @patch('app.messagebox.showinfo')
+    def test_qq_mail_blocked_while_agent_busy(self, info):
+        a=self.app(); a.busy=True
+        a._qq_mail()
+        info.assert_called_once()
+        a.window.after.assert_not_called()
+
+    def test_qq_poll_does_not_resume_or_cancel_agent(self):
+        a=self.app(); a.busy=True; a.qq_busy=True
+        a.audit=Mock(); a.status_text=Mock(); a.sendbtn=Mock(); a.combo=Mock()
+        a.notifications.put(('qq_sent', {'text':'已发送给 a@qq.com','summary':'to=a@qq.com kind=note bytes=10'}))
+        a._poll()
+        self.assertTrue(a.busy)
+        self.assertFalse(a.qq_busy)
+        a.sendbtn.configure.assert_not_called()
+        a.audit.record.assert_called_once_with('qq_mail_send','success','to=a@qq.com kind=note bytes=10')
+        self.assertNotIn('授权码', a._print.call_args.args[1])
+
+    def test_qq_inbox_is_displayed_and_not_sent_to_agent(self):
+        a=self.app(); a.qq_busy=True; a.audit=Mock(); a.status_text=Mock()
+        note=IncomingNote('1','a@qq.com','PortableAI note: 看一下','note','看一下','邮箱里的原文')
+        a.notifications.put(('qq_inbox', {'notes':[note],'skipped':1}))
+        a._poll()
+        self.assertEqual(a.qq_inbox, [note])
+        a.agent.run.assert_not_called()
+        shown=a._print.call_args.args[1]
+        self.assertIn('邮箱里的原文', shown)
+        self.assertIn('不会自动执行', shown)
+        a.audit.record.assert_called_once_with('qq_mail_receive','success','count=1 skipped=1')
+
+    @patch('app.messagebox.askyesno', return_value=False)
+    def test_qq_fill_decline_leaves_prompt(self, confirm):
+        a=self.app(); a.prompt=Mock()
+        a.qq_inbox=[IncomingNote('1','a@qq.com','PortableAI task: 标题','task','标题','不要自动执行')]
+        a._qq_fill_latest()
+        confirm.assert_called_once()
+        a.prompt.delete.assert_not_called()
+        a.agent.run.assert_not_called()
+
+    @patch('app.messagebox.askyesno', return_value=True)
+    def test_qq_fill_copies_body_without_running_agent(self, confirm):
+        a=self.app(); a.prompt=Mock()
+        a.qq_inbox=[IncomingNote('1','a@qq.com','PortableAI task: 标题','task','标题','请先审阅这段文字')]
+        a._qq_fill_latest()
+        a.prompt.delete.assert_called_once_with('1.0','end')
+        a.prompt.insert.assert_called_once_with('1.0','请先审阅这段文字')
+        a.agent.run.assert_not_called()
 
     def test_build_script_never_installs_dependencies(self):
         from pathlib import Path
