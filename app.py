@@ -14,6 +14,7 @@ from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
 from portable_ai.agent import Agent
 from portable_ai.disk_budget import report as disk_report
 from portable_ai.hybrid_sync import HybridSync
+from portable_ai.qq_mail import QQLogin, QQMailbox, QQMailError, QQSmtpImap, build_message, format_inbox
 from portable_ai.storage import Audit, MemoryStore
 from portable_ai.tools import ToolRouter
 from portable_ai.workspace import Workspace
@@ -39,6 +40,11 @@ class Application:
         self.syncing=False
         self._closed=False
         self._cloud_consent=set()
+        self.qq_busy=False
+        self.qq_inbox=[]
+        self.qq_address=tk.StringVar()
+        self.qq_code=tk.StringVar()
+        self.qq_peer=tk.StringVar()
         self.notifications=queue.Queue()
         self._selected_provider='DeepSeek'
         self.provider=tk.StringVar(value=self._selected_provider)
@@ -94,6 +100,7 @@ class Application:
         ttk.Button(extras,text='编辑记忆',command=self._edit_memory).pack(side='left',padx=(0,8))
         ttk.Button(extras,text='回滚文件写入',command=self._rollback_file).pack(side='left',padx=(0,8))
         ttk.Button(extras,text='查看操作审计',command=self._audit_log).pack(side='left',padx=(0,8))
+        ttk.Button(extras,text='QQ邮箱',command=self._qq_mail).pack(side='left',padx=(0,8))
         ttk.Button(actions,text='清空本次对话',command=self._clear_chat).pack(side='right')
         self.console=scrolledtext.ScrolledText(wrapper,wrap='word',state='disabled',height=18,font=('Microsoft YaHei UI',10))
         self.console.pack(fill='both',expand=True)
@@ -464,6 +471,23 @@ class Application:
                     self.status_text.set('同步异常；请检查 U 盘连接并重试')
                     if self.sync.bound:
                         self.sync.set_auto(False)
+                elif kind=='qq_sent':
+                    self.qq_busy=False
+                    self._print('QQ邮箱', body['text'])
+                    self.audit.record('qq_mail_send','success', body['summary'])
+                    self.status_text.set('QQ 邮件已发出')
+                elif kind=='qq_inbox':
+                    self.qq_busy=False
+                    notes, skipped=body['notes'], body['skipped']
+                    self.qq_inbox=list(notes)
+                    self._print('QQ邮箱', format_inbox(self.qq_inbox, skipped))
+                    self.audit.record('qq_mail_receive','success', f'count={len(notes)} skipped={skipped}')
+                    self.status_text.set('已收取 %d 封 PortableAI 邮件'%len(notes))
+                elif kind=='qq_error':
+                    self.qq_busy=False
+                    self._print('QQ邮箱', body)
+                    self.audit.record('qq_mail','error','连接或登录失败')
+                    self.status_text.set('QQ 邮箱操作未完成')
                 else:
                     self._print('AI' if kind=='reply' else '错误',body)
                     self.busy=False
@@ -617,6 +641,134 @@ class Application:
             self._print('操作审计（最近最多100条）','\n'.join(lines) or '暂无操作记录。')
         except OSError as exc:
             messagebox.showerror('无法读取审计',str(exc))
+
+    def _qq_mail(self):
+        if self.busy:
+            messagebox.showinfo('任务进行中','请等待当前任务完成后再使用 QQ 邮箱。')
+            return
+        existing=getattr(self,'qq_window',None)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.lift()
+                    return
+            except tk.TclError:
+                pass
+        win=tk.Toplevel(self.window)
+        self.qq_window=win
+        win.title('QQ 邮箱通道')
+        win.geometry('680x560')
+        win.minsize(560,460)
+        win.transient(self.window)
+        frame=ttk.Frame(win,padding=14)
+        frame.pack(fill='both',expand=True)
+        ttk.Label(frame,wraplength=640,justify='left',text=(
+            '用你自己的 QQ 邮箱收发短文本，代替一台常开的任务服务器。'
+            '在 QQ 邮箱 → 设置 → 账户 中开启 IMAP/SMTP，并生成授权码。'
+            '授权码只留在本次运行的内存里，不写入 U 盘。'
+            '邮件以明文经过 QQ，请不要写入密钥或私人文件。收到的内容不会自动执行。'
+        )).pack(anchor='w',pady=(0,10))
+        form=ttk.Frame(frame)
+        form.pack(fill='x')
+
+        def row(label, variable, secret=False):
+            line=ttk.Frame(form)
+            line.pack(fill='x',pady=2)
+            ttk.Label(line,text=label,width=12).pack(side='left')
+            entry=ttk.Entry(line,textvariable=variable,show='●' if secret else '')
+            entry.pack(side='left',fill='x',expand=True)
+
+        row('QQ 邮箱', self.qq_address)
+        row('授权码', self.qq_code, secret=True)
+        row('对方邮箱', self.qq_peer)
+        kind=tk.StringVar(value='note')
+        title=tk.StringVar()
+        line=ttk.Frame(form)
+        line.pack(fill='x',pady=2)
+        ttk.Label(line,text='类型',width=12).pack(side='left')
+        ttk.Combobox(line,textvariable=kind,values=['note','task','result'],state='readonly',width=10).pack(side='left')
+        ttk.Label(line,text='标题').pack(side='left',padx=(12,6))
+        ttk.Entry(line,textvariable=title).pack(side='left',fill='x',expand=True)
+        ttk.Label(frame,text='正文').pack(anchor='w',pady=(8,2))
+        body=tk.Text(frame,height=10,wrap='word',font=('Microsoft YaHei UI',10))
+        body.pack(fill='both',expand=True)
+        seed=self.prompt.get('1.0','end').strip()
+        if seed:
+            body.insert('1.0', seed)
+        buttons=ttk.Frame(frame)
+        buttons.pack(fill='x',pady=(10,0))
+
+        def close():
+            self.qq_window=None
+            win.destroy()
+
+        def on_send():
+            if self.qq_busy:
+                messagebox.showinfo('QQ邮箱','正在连接邮箱，请稍候。',parent=win)
+                return
+            try:
+                login=QQLogin.check(self.qq_address.get(), self.qq_code.get())
+                raw, note=build_message(login, self.qq_peer.get(), title.get(), body.get('1.0','end'), kind.get())
+            except QQMailError as exc:
+                messagebox.showerror('QQ邮箱', str(exc), parent=win)
+                return
+            preview=(f'发给 {note.recipient}\n主题 {note.subject}\n\n{note.body[:800]}'
+                     '\n\n邮件以明文经过 QQ 服务器。授权码不会写进邮件。是否发送？')
+            if not messagebox.askyesno('确认通过 QQ 邮箱发送', preview, parent=win):
+                self.audit.record('qq_mail_send','denied', f'to={note.recipient} kind={note.kind}')
+                return
+            self.qq_busy=True
+            self.status_text.set('正在通过 smtp.qq.com 发送...')
+            def worker():
+                try:
+                    QQMailbox(login, QQSmtpImap()).send_text(note.recipient, note.title, note.body, note.kind)
+                    self.notifications.put(('qq_sent', {
+                        'text': f'已发送给 {note.recipient}\n主题：{note.subject}',
+                        'summary': f'to={note.recipient} kind={note.kind} bytes={len(raw)}',
+                    }))
+                except QQMailError as exc:
+                    self.notifications.put(('qq_error', str(exc)))
+            threading.Thread(target=worker, daemon=True).start()
+
+        def on_receive():
+            if self.qq_busy:
+                messagebox.showinfo('QQ邮箱','正在连接邮箱，请稍候。',parent=win)
+                return
+            try:
+                login=QQLogin.check(self.qq_address.get(), self.qq_code.get())
+            except QQMailError as exc:
+                messagebox.showerror('QQ邮箱', str(exc), parent=win)
+                return
+            self.qq_busy=True
+            self.status_text.set('正在通过 imap.qq.com 收取...')
+            def worker():
+                try:
+                    notes, skipped=QQMailbox(login, QQSmtpImap()).receive_text()
+                    self.notifications.put(('qq_inbox', {'notes':notes,'skipped':skipped}))
+                except QQMailError as exc:
+                    self.notifications.put(('qq_error', str(exc)))
+            threading.Thread(target=worker, daemon=True).start()
+
+        ttk.Button(buttons,text='发送',command=on_send).pack(side='left',padx=(0,8))
+        ttk.Button(buttons,text='收取',command=on_receive).pack(side='left',padx=(0,8))
+        ttk.Button(buttons,text='填入任务框',command=self._qq_fill_latest).pack(side='left')
+        ttk.Button(buttons,text='关闭',command=close).pack(side='right')
+        win.protocol('WM_DELETE_WINDOW', close)
+
+    def _qq_fill_latest(self):
+        if self.busy:
+            messagebox.showinfo('任务进行中','请等待当前任务完成后再改任务框。')
+            return
+        notes=getattr(self,'qq_inbox',None) or []
+        if not notes:
+            messagebox.showinfo('QQ邮箱','还没有收取到 PortableAI 邮件。')
+            return
+        note=notes[0]
+        if not messagebox.askyesno('确认填入任务框',
+            '这封邮件来自邮箱，程序不会自动执行。确认把正文放进任务框，供你审阅后再自行发送？\n\n'+note.title):
+            return
+        self.prompt.delete('1.0','end')
+        self.prompt.insert('1.0', note.body)
 
     def _clear_chat(self):
         if self.busy or self.syncing:
